@@ -364,12 +364,26 @@ presets:
 - Setup `src/` package structure
 - Implement `src/utils/logger.py`
 
+**Git checkpoint**:
+```bash
+git add .
+git commit -m "Phase 1: Core infrastructure and configuration"
+git push origin main
+```
+
 ### Phase 2: Database Layer
 **Files to create**:
 - `src/storage/models.py` - SQLAlchemy ORM models (Submission, Comment, KeywordMatch, Search, Topic, AnalysisResult)
 - `src/storage/database.py` - Database connection, session management
 - `src/storage/repositories.py` - Repository pattern for data access
 - `alembic.ini` and migrations for schema setup
+
+**Git checkpoint**:
+```bash
+git add .
+git commit -m "Phase 2: Database models and migrations"
+git push origin main
+```
 
 ### Phase 3: Reddit Scraper
 **Files to create**:
@@ -379,11 +393,25 @@ presets:
 - `src/scraper/search_engine.py` - Orchestrates searches, handles keywords, saves to DB
 - `src/utils/state_manager.py` - State tracking for resume
 
+**Git checkpoint**:
+```bash
+git add .
+git commit -m "Phase 3: Reddit scraper with rate limiting"
+git push origin main
+```
+
 ### Phase 4: CLI Interface
 **Files to create**:
 - Update `main.py` - Entry point with Click app
 - `src/cli/commands.py` - Command implementations (search, report, list, resume)
 - `src/cli/validators.py` - Input validation helpers
+
+**Git checkpoint**:
+```bash
+git add .
+git commit -m "Phase 4: CLI interface with Click commands"
+git push origin main
+```
 
 ### Phase 5: Analysis Pipeline
 **Files to create**:
@@ -392,11 +420,25 @@ presets:
 - `src/analysis/sentiment_analyzer.py` - Transformers-based sentiment
 - `src/analysis/context_extractor.py` - Extract and rank contexts
 
+**Git checkpoint**:
+```bash
+git add .
+git commit -m "Phase 5: Analysis pipeline (NLP and ML)"
+git push origin main
+```
+
 ### Phase 6: Visualization
 **Files to create**:
 - `src/visualization/charts.py` - Plotly chart builders
 - `src/visualization/templates/report.html` - Jinja2 HTML template
 - `src/visualization/dashboard.py` - Dashboard generator (runs analyses, builds charts, renders HTML)
+
+**Git checkpoint**:
+```bash
+git add .
+git commit -m "Phase 6: Interactive visualizations and dashboards"
+git push origin main
+```
 
 ### Phase 7: Testing & Documentation
 **Files to create**:
@@ -405,6 +447,13 @@ presets:
 - `tests/test_analysis.py` - Test analysis modules
 - Update `README.md` - Usage guide, setup instructions
 - Update `CLAUDE.md` - Development guide
+
+**Git checkpoint**:
+```bash
+git add .
+git commit -m "Phase 7: Tests and documentation complete"
+git push origin main
+```
 
 ## Critical Implementation Details
 
