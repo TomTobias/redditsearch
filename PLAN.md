@@ -159,6 +159,13 @@ redditsearch/
 - `pandas>=2.1.0` - Data manipulation
 - `tqdm>=4.66.0` - Progress bars
 
+**Testing & Development** (optional dependencies):
+- `pytest>=7.4.0` - Testing framework
+- `pytest-cov>=4.1.0` - Code coverage reporting
+- `pytest-mock>=3.12.0` - Mocking support
+- `black>=23.12.0` - Code formatting
+- `ruff>=0.1.0` - Fast linting
+
 ### Database Schema
 
 **Core Tables**:
@@ -357,15 +364,24 @@ presets:
 
 ### Phase 1: Core Infrastructure
 **Files to create**:
-- Update `pyproject.toml` with all dependencies
+- Update `pyproject.toml` with all dependencies (including dev dependencies)
 - Create `config/settings.py` with Pydantic settings
 - Create `config/subreddits.yaml` with default lists
 - Create `.env.example` template
-- Setup `src/` package structure
+- Setup `src/` package structure (with `__init__.py` files)
 - Implement `src/utils/logger.py`
+- Create `tests/test_config.py` - Test settings loading and validation
+- Create `pytest.ini` - Pytest configuration
+
+**Testing**:
+- Test that settings load correctly from .env
+- Test YAML config parsing
+- Test logger initialization
+- Run: `pytest tests/test_config.py -v`
 
 **Git checkpoint**:
 ```bash
+pytest tests/test_config.py -v
 git add .
 git commit -m "Phase 1: Core infrastructure and configuration"
 git push origin main
@@ -377,9 +393,18 @@ git push origin main
 - `src/storage/database.py` - Database connection, session management
 - `src/storage/repositories.py` - Repository pattern for data access
 - `alembic.ini` and migrations for schema setup
+- `tests/test_storage.py` - Test models, database operations, repositories
+
+**Testing**:
+- Test model creation and relationships
+- Test repository CRUD operations
+- Test deduplication logic (get_or_create_submission)
+- Test database migrations
+- Run: `pytest tests/test_storage.py -v`
 
 **Git checkpoint**:
 ```bash
+pytest tests/test_storage.py -v
 git add .
 git commit -m "Phase 2: Database models and migrations"
 git push origin main
@@ -392,9 +417,19 @@ git push origin main
 - `src/scraper/comment_parser.py` - Comment tree traversal logic
 - `src/scraper/search_engine.py` - Orchestrates searches, handles keywords, saves to DB
 - `src/utils/state_manager.py` - State tracking for resume
+- `tests/test_scraper.py` - Test rate limiter, Reddit client, search engine
+
+**Testing**:
+- Test rate limiter delays and backoff logic
+- Test Reddit client with mocked PRAW responses
+- Test comment tree traversal
+- Test keyword matching and context extraction
+- Test state manager save/resume functionality
+- Run: `pytest tests/test_scraper.py -v`
 
 **Git checkpoint**:
 ```bash
+pytest tests/test_scraper.py -v
 git add .
 git commit -m "Phase 3: Reddit scraper with rate limiting"
 git push origin main
@@ -405,9 +440,18 @@ git push origin main
 - Update `main.py` - Entry point with Click app
 - `src/cli/commands.py` - Command implementations (search, report, list, resume)
 - `src/cli/validators.py` - Input validation helpers
+- `tests/test_cli.py` - Test CLI commands and validators
+
+**Testing**:
+- Test CLI command parsing and validation
+- Test error handling for invalid inputs
+- Test command execution with mocked dependencies
+- Use Click's CliRunner for testing
+- Run: `pytest tests/test_cli.py -v`
 
 **Git checkpoint**:
 ```bash
+pytest tests/test_cli.py -v
 git add .
 git commit -m "Phase 4: CLI interface with Click commands"
 git push origin main
@@ -419,9 +463,19 @@ git push origin main
 - `src/analysis/topic_clusterer.py` - K-means clustering with TF-IDF
 - `src/analysis/sentiment_analyzer.py` - Transformers-based sentiment
 - `src/analysis/context_extractor.py` - Extract and rank contexts
+- `tests/test_analysis.py` - Test all analysis modules
+
+**Testing**:
+- Test keyword frequency calculations
+- Test co-occurrence matrix generation
+- Test topic clustering with sample data
+- Test sentiment analysis with known examples
+- Test context extraction and ranking
+- Run: `pytest tests/test_analysis.py -v`
 
 **Git checkpoint**:
 ```bash
+pytest tests/test_analysis.py -v
 git add .
 git commit -m "Phase 5: Analysis pipeline (NLP and ML)"
 git push origin main
@@ -432,26 +486,45 @@ git push origin main
 - `src/visualization/charts.py` - Plotly chart builders
 - `src/visualization/templates/report.html` - Jinja2 HTML template
 - `src/visualization/dashboard.py` - Dashboard generator (runs analyses, builds charts, renders HTML)
+- `tests/test_visualization.py` - Test chart generation and dashboard
+
+**Testing**:
+- Test chart creation with sample data
+- Test HTML template rendering
+- Test dashboard generation end-to-end
+- Verify generated HTML is valid
+- Run: `pytest tests/test_visualization.py -v`
 
 **Git checkpoint**:
 ```bash
+pytest tests/test_visualization.py -v
 git add .
 git commit -m "Phase 6: Interactive visualizations and dashboards"
 git push origin main
 ```
 
-### Phase 7: Testing & Documentation
+### Phase 7: Integration Testing & Documentation
 **Files to create**:
-- `tests/test_scraper.py` - Test Reddit client, rate limiter
-- `tests/test_storage.py` - Test models, repositories
-- `tests/test_analysis.py` - Test analysis modules
-- Update `README.md` - Usage guide, setup instructions
-- Update `CLAUDE.md` - Development guide
+- `tests/test_integration.py` - End-to-end integration tests
+- `tests/conftest.py` - Shared pytest fixtures
+- Update `README.md` - Complete usage guide, setup instructions, examples
+- Update `CLAUDE.md` - Development guide with architecture details
+
+**Testing**:
+- Run full integration tests (search -> analyze -> visualize)
+- Test with mock Reddit data end-to-end
+- Run full test suite with coverage: `pytest --cov=src --cov-report=html`
+- Verify coverage is >80%
+- Run linting: `ruff check src/`
+- Run formatting: `black src/ tests/`
 
 **Git checkpoint**:
 ```bash
+pytest --cov=src --cov-report=html
+ruff check src/
+black src/ tests/ --check
 git add .
-git commit -m "Phase 7: Tests and documentation complete"
+git commit -m "Phase 7: Integration tests and documentation complete"
 git push origin main
 ```
 
