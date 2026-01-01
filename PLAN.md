@@ -184,9 +184,9 @@ redditsearch/
    - Indexes: (submission_id, depth) for tree queries
 
 4. **keyword_matches** - Where keywords found with context
-   - Fields: search_id (FK), keyword, submission_id/comment_id (FKs), match_type, context_before, matched_text, context_after, full_paragraph
+   - Fields: search_id (FK), keyword, submission_id/comment_id (FKs), match_type, match_score (float for semantic similarity), context_before, matched_text, context_after, full_paragraph, embedding (optional: vector representation)
    - Purpose: Store extracted context for analysis
-   - Indexes: (keyword, search_id)
+   - Indexes: (keyword, search_id), (match_score)
 
 5. **analysis_results** - Cached analysis outputs
    - Fields: search_id (FK), analysis_type, results (JSON), generated_at
@@ -222,13 +222,28 @@ class AdaptiveRateLimiter:
 **Primary Commands**:
 
 ```bash
-# Search Reddit
+# Search Reddit (exact keyword matching)
 redditsearch search \
   --keywords "pay for,wish there was,need a tool" \
   --subreddits "SaaS,Entrepreneur,startups" \
   --days 30 \
   --min-score 5 \
   --max-posts 100
+
+# Search with semantic similarity (finds similar phrases)
+redditsearch search \
+  --keywords "pay for" \
+  --search-mode semantic \
+  --similarity-threshold 0.75 \
+  --subreddits "SaaS,Entrepreneur" \
+  --days 30
+
+# Hybrid search (exact + semantic)
+redditsearch search \
+  --keywords "pay for,need a tool" \
+  --search-mode hybrid \
+  --subreddits "SaaS" \
+  --days 7
 
 # Generate report for a search
 redditsearch report <search_id> --format html
@@ -320,6 +335,10 @@ presets:
 - Pydantic-based validation
 - Load from .env
 - Defaults for rate limits, search params, output paths
+- Semantic search configuration:
+  - `SEMANTIC_MODEL`: Default model (all-MiniLM-L6-v2)
+  - `SEMANTIC_THRESHOLD`: Default similarity threshold (0.75)
+  - `SEARCH_MODE`: Default search mode (hybrid)
 
 ### Error Handling
 
@@ -416,14 +435,17 @@ git push origin main
 - `src/scraper/reddit_client.py` - PRAW wrapper with rate limiting
 - `src/scraper/comment_parser.py` - Comment tree traversal logic
 - `src/scraper/search_engine.py` - Orchestrates searches, handles keywords, saves to DB
+- `src/scraper/semantic_matcher.py` - Semantic similarity matching using sentence-transformers
 - `src/utils/state_manager.py` - State tracking for resume
-- `tests/test_scraper.py` - Test rate limiter, Reddit client, search engine
+- `tests/test_scraper.py` - Test rate limiter, Reddit client, search engine, semantic matcher
 
 **Testing**:
 - Test rate limiter delays and backoff logic
 - Test Reddit client with mocked PRAW responses
 - Test comment tree traversal
-- Test keyword matching and context extraction
+- Test exact keyword matching and context extraction
+- Test semantic similarity matching with known examples
+- Test hybrid search mode (exact + semantic)
 - Test state manager save/resume functionality
 - Run: `pytest tests/test_scraper.py -v`
 
@@ -530,7 +552,107 @@ git push origin main
 
 ## Critical Implementation Details
 
-### 1. Reddit API Setup
+### 1. Semantic Search Implementation
+
+**Purpose**: Find semantically similar content beyond exact keyword matches.
+
+**Use Cases**:
+- "pay for" also finds: "willing to spend money on", "would buy", "shut up and take my money"
+- "need a tool" also finds: "looking for a solution", "wish there was an app", "desperately need software"
+- "frustrated with" also finds: "annoyed by", "hate dealing with", "this is driving me crazy"
+
+**Implementation** (`src/scraper/semantic_matcher.py`):
+```python
+from sentence_transformers import SentenceTransformer, util
+
+class SemanticMatcher:
+    """Find semantically similar text using embeddings"""
+
+    def __init__(self, model_name='all-MiniLM-L6-v2'):
+        # Lightweight model: 384 dimensions, ~80MB
+        self.model = SentenceTransformer(model_name)
+
+    def encode_query(self, query: str):
+        """Convert query to vector embedding"""
+        return self.model.encode(query, convert_to_tensor=True)
+
+    def find_similar(self, query_embedding, texts: list, threshold=0.7):
+        """
+        Find texts semantically similar to query
+
+        Args:
+            query_embedding: Pre-encoded query vector
+            texts: List of text strings to search
+            threshold: Similarity threshold (0.0-1.0, default 0.7)
+
+        Returns:
+            List of (text, similarity_score) tuples above threshold
+        """
+        text_embeddings = self.model.encode(texts, convert_to_tensor=True)
+        similarities = util.cos_sim(query_embedding, text_embeddings)[0]
+
+        matches = []
+        for idx, score in enumerate(similarities):
+            if score >= threshold:
+                matches.append((texts[idx], float(score)))
+
+        return sorted(matches, key=lambda x: x[1], reverse=True)
+```
+
+**Search Modes**:
+
+1. **Exact Mode** (default):
+   - Traditional case-insensitive string matching
+   - Fast, precise
+   - Use: `--search-mode exact`
+
+2. **Semantic Mode**:
+   - Encode query as embedding
+   - Compare to all text using cosine similarity
+   - Return matches above threshold (default: 0.75)
+   - Use: `--search-mode semantic --similarity-threshold 0.75`
+
+3. **Hybrid Mode** (recommended):
+   - First: Exact matches (score = 1.0)
+   - Then: Semantic matches above threshold
+   - Deduplicate by position
+   - Use: `--search-mode hybrid`
+
+**Database Storage**:
+```python
+class KeywordMatch:
+    # ... existing fields ...
+    match_score: float  # 1.0 for exact, 0.0-1.0 for semantic
+    embedding: Optional[bytes]  # Pickled numpy array (optional)
+```
+
+**Performance Considerations**:
+- Model loading: ~1 second (cached after first use)
+- Encoding: ~10ms per sentence
+- For 100 comments: ~1 second total
+- Batch encoding for efficiency
+
+**CLI Examples**:
+```bash
+# Find exact phrase
+redditsearch search --keywords "pay for" --search-mode exact
+
+# Find semantic variations (looser)
+redditsearch search --keywords "pay for" --search-mode semantic --similarity-threshold 0.7
+
+# Find semantic variations (stricter)
+redditsearch search --keywords "pay for" --search-mode semantic --similarity-threshold 0.85
+
+# Best of both worlds
+redditsearch search --keywords "pay for,need a tool" --search-mode hybrid
+```
+
+**Model Choice**:
+- Default: `all-MiniLM-L6-v2` (80MB, fast, good quality)
+- Alternative: `all-mpnet-base-v2` (420MB, slower, best quality)
+- Configurable in settings
+
+### 2. Reddit API Setup
 **User must obtain** (from https://www.reddit.com/prefs/apps):
 - Application name
 - Client ID
