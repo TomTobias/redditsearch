@@ -83,22 +83,45 @@ redditsearch/
 ├── config/
 │   ├── __init__.py
 │   ├── settings.py                 # Pydantic settings
-│   └── subreddits.yaml             # Default subreddit groups
+│   └── sources/                    # Source-specific configs
+│       ├── reddit.yaml             # Reddit subreddit groups
+│       ├── twitter.yaml            # Twitter lists (future)
+│       └── hackernews.yaml         # HN topics (future)
 ├── src/
 │   ├── __init__.py
 │   ├── cli/
 │   │   ├── __init__.py
 │   │   ├── commands.py             # Click commands
 │   │   └── validators.py           # Input validation
-│   ├── scraper/
+│   ├── sources/                    # Pluggable data source modules
 │   │   ├── __init__.py
-│   │   ├── reddit_client.py        # PRAW wrapper
-│   │   ├── search_engine.py        # Search orchestration
-│   │   ├── comment_parser.py       # Comment tree traversal
-│   │   └── rate_limiter.py         # Adaptive rate limiting
+│   │   ├── base.py                 # Abstract base classes
+│   │   ├── reddit/
+│   │   │   ├── __init__.py
+│   │   │   ├── client.py           # Reddit-specific client (PRAW)
+│   │   │   ├── parser.py           # Reddit comment tree parsing
+│   │   │   └── models.py           # Reddit-specific data models
+│   │   ├── twitter/                # Future: Twitter/X support
+│   │   │   ├── __init__.py
+│   │   │   ├── client.py
+│   │   │   └── parser.py
+│   │   ├── hackernews/             # Future: HackerNews support
+│   │   │   ├── __init__.py
+│   │   │   ├── client.py
+│   │   │   └── parser.py
+│   │   └── discord/                # Future: Discord support
+│   │       ├── __init__.py
+│   │       ├── client.py
+│   │       └── parser.py
+│   ├── core/                       # Source-agnostic core functionality
+│   │   ├── __init__.py
+│   │   ├── semantic_matcher.py     # Semantic similarity (all sources)
+│   │   ├── rate_limiter.py         # Generic rate limiting
+│   │   ├── search_engine.py        # Orchestrates multi-source searches
+│   │   └── content_processor.py    # Process content from any source
 │   ├── storage/
 │   │   ├── __init__.py
-│   │   ├── models.py               # SQLAlchemy ORM
+│   │   ├── models.py               # Generic models (Post, Reply, Match)
 │   │   ├── database.py             # DB connection
 │   │   └── repositories.py         # Data access layer
 │   ├── analysis/
@@ -124,7 +147,11 @@ redditsearch/
 │   └── reports/                    # Generated HTML
 └── tests/
     ├── __init__.py
-    ├── test_scraper.py
+    ├── test_sources/               # Test each source plugin
+    │   ├── test_reddit.py
+    │   ├── test_base.py
+    │   └── test_twitter.py
+    ├── test_core.py
     ├── test_storage.py
     └── test_analysis.py
 ```
@@ -168,25 +195,31 @@ redditsearch/
 
 ### Database Schema
 
-**Core Tables**:
+**Core Tables** (Source-Agnostic Design):
 
 1. **searches** - Track each search operation
-   - Fields: search_id (UUID), keywords (JSON), subreddits (JSON), time_filter, min_score, status, timestamps
+   - Fields: search_id (UUID), keywords (JSON), sources (JSON), source_targets (JSON), time_filter, min_score, status, timestamps
    - Purpose: Resume capability, search history
+   - Note: `sources` = ['reddit', 'twitter'], `source_targets` = {'reddit': ['SaaS', 'Entrepreneur'], 'twitter': ['#startups']}
 
-2. **submissions** - Reddit posts/threads
-   - Fields: reddit_id (unique), title, body, author, subreddit, url, score, num_comments, created_utc
-   - Deduplication: `reddit_id` unique constraint, `first_seen_search_id`, `seen_count`
-   - Indexes: (created_utc, score), (subreddit, created_utc)
+2. **posts** - Top-level content (Reddit submissions, tweets, HN posts)
+   - Fields: post_id (int PK), source (str), source_id (unique per source), title, body, author, source_location (subreddit/hashtag/etc), url, score, reply_count, created_utc
+   - Deduplication: Unique constraint on (source, source_id)
+   - Indexes: (source, created_utc, score), (source_location, created_utc)
+   - Examples:
+     - Reddit: source='reddit', source_location='r/SaaS'
+     - Twitter: source='twitter', source_location='#startups'
+     - HN: source='hackernews', source_location='Show HN'
 
-3. **comments** - Reddit comments
-   - Fields: reddit_id (unique), submission_id (FK), parent_id (threading), body, author, score, depth
-   - Indexes: (submission_id, depth) for tree queries
+3. **replies** - Nested responses (Reddit comments, tweet replies, HN comments)
+   - Fields: reply_id (int PK), source (str), source_id (unique per source), post_id (FK), parent_id (nullable FK to replies), body, author, score, depth
+   - Indexes: (post_id, depth) for tree queries
+   - Supports multi-level threading across all sources
 
 4. **keyword_matches** - Where keywords found with context
-   - Fields: search_id (FK), keyword, submission_id/comment_id (FKs), match_type, match_score (float for semantic similarity), context_before, matched_text, context_after, full_paragraph, embedding (optional: vector representation)
+   - Fields: search_id (FK), keyword, source (str), post_id (nullable FK), reply_id (nullable FK), match_type, match_score (float for semantic similarity), context_before, matched_text, context_after, full_paragraph, embedding (optional: vector representation)
    - Purpose: Store extracted context for analysis
-   - Indexes: (keyword, search_id), (match_score)
+   - Indexes: (keyword, search_id), (match_score), (source)
 
 5. **analysis_results** - Cached analysis outputs
    - Fields: search_id (FK), analysis_type, results (JSON), generated_at
@@ -429,31 +462,38 @@ git commit -m "Phase 2: Database models and migrations"
 git push origin main
 ```
 
-### Phase 3: Reddit Scraper
+### Phase 3: Data Sources & Core Search
 **Files to create**:
-- `src/scraper/rate_limiter.py` - Adaptive rate limiting class
-- `src/scraper/reddit_client.py` - PRAW wrapper with rate limiting
-- `src/scraper/comment_parser.py` - Comment tree traversal logic
-- `src/scraper/search_engine.py` - Orchestrates searches, handles keywords, saves to DB
-- `src/scraper/semantic_matcher.py` - Semantic similarity matching using sentence-transformers
+- `src/sources/base.py` - Abstract base classes (DataSourcePlugin, SourcePost, SourceReply)
+- `src/sources/reddit/__init__.py` - Reddit plugin module
+- `src/sources/reddit/client.py` - Reddit plugin implementation (PRAW)
+- `src/sources/reddit/parser.py` - Reddit comment tree parsing
+- `src/core/rate_limiter.py` - Generic adaptive rate limiting
+- `src/core/semantic_matcher.py` - Semantic similarity matching using sentence-transformers
+- `src/core/search_engine.py` - Multi-source search orchestration
+- `src/core/content_processor.py` - Process and normalize content from any source
 - `src/utils/state_manager.py` - State tracking for resume
-- `tests/test_scraper.py` - Test rate limiter, Reddit client, search engine, semantic matcher
+- `tests/test_sources/test_base.py` - Test plugin interface
+- `tests/test_sources/test_reddit.py` - Test Reddit plugin
+- `tests/test_core.py` - Test core functionality
 
 **Testing**:
+- Test plugin base interface contract
+- Test Reddit plugin authentication and search
+- Test Reddit comment tree traversal with mocked PRAW
 - Test rate limiter delays and backoff logic
-- Test Reddit client with mocked PRAW responses
-- Test comment tree traversal
 - Test exact keyword matching and context extraction
 - Test semantic similarity matching with known examples
 - Test hybrid search mode (exact + semantic)
+- Test multi-source search engine orchestration
 - Test state manager save/resume functionality
-- Run: `pytest tests/test_scraper.py -v`
+- Run: `pytest tests/test_sources/ tests/test_core.py -v`
 
 **Git checkpoint**:
 ```bash
-pytest tests/test_scraper.py -v
+pytest tests/test_sources/ tests/test_core.py -v
 git add .
-git commit -m "Phase 3: Reddit scraper with rate limiting"
+git commit -m "Phase 3: Plugin architecture with Reddit implementation"
 git push origin main
 ```
 
@@ -652,7 +692,210 @@ redditsearch search --keywords "pay for,need a tool" --search-mode hybrid
 - Alternative: `all-mpnet-base-v2` (420MB, slower, best quality)
 - Configurable in settings
 
-### 2. Reddit API Setup
+### 2. Plugin Architecture for Multi-Source Support
+
+**Purpose**: Allow searching across multiple platforms (Reddit, Twitter, HackerNews, Discord, etc.) with a unified interface.
+
+**Design Pattern**: Plugin-based architecture with abstract base classes.
+
+**Base Interface** (`src/sources/base.py`):
+```python
+from abc import ABC, abstractmethod
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+
+@dataclass
+class SourcePost:
+    """Unified post representation across all sources"""
+    source: str  # 'reddit', 'twitter', 'hackernews', etc.
+    source_id: str  # Platform-specific ID
+    title: Optional[str]
+    body: str
+    author: str
+    source_location: str  # Subreddit, hashtag, category
+    url: str
+    score: int
+    reply_count: int
+    created_utc: datetime
+    raw_data: Dict  # Original API response for debugging
+
+@dataclass
+class SourceReply:
+    """Unified reply representation across all sources"""
+    source: str
+    source_id: str
+    post_id: str  # Reference to parent post
+    parent_id: Optional[str]  # For threading
+    body: str
+    author: str
+    score: int
+    depth: int
+    created_utc: datetime
+    raw_data: Dict
+
+class DataSourcePlugin(ABC):
+    """Abstract base class for all data source plugins"""
+
+    @property
+    @abstractmethod
+    def source_name(self) -> str:
+        """Unique identifier for this source (e.g., 'reddit')"""
+        pass
+
+    @abstractmethod
+    def authenticate(self, credentials: Dict) -> bool:
+        """Authenticate with the platform API"""
+        pass
+
+    @abstractmethod
+    def search(
+        self,
+        keywords: List[str],
+        targets: List[str],  # Subreddits, hashtags, etc.
+        time_filter: str,
+        min_score: int,
+        max_results: int,
+        search_mode: str = 'hybrid'
+    ) -> List[SourcePost]:
+        """Search for posts matching criteria"""
+        pass
+
+    @abstractmethod
+    def get_replies(
+        self,
+        post: SourcePost,
+        max_depth: int = 10
+    ) -> List[SourceReply]:
+        """Get replies/comments for a post"""
+        pass
+
+    @abstractmethod
+    def get_rate_limits(self) -> Dict:
+        """Return current rate limit status"""
+        pass
+```
+
+**Reddit Plugin Implementation** (`src/sources/reddit/client.py`):
+```python
+import praw
+from src.sources.base import DataSourcePlugin, SourcePost, SourceReply
+
+class RedditPlugin(DataSourcePlugin):
+    """Reddit data source implementation"""
+
+    @property
+    def source_name(self) -> str:
+        return 'reddit'
+
+    def authenticate(self, credentials: Dict) -> bool:
+        self.reddit = praw.Reddit(
+            client_id=credentials['client_id'],
+            client_secret=credentials['client_secret'],
+            user_agent=credentials['user_agent']
+        )
+        return True
+
+    def search(self, keywords, targets, time_filter, min_score, max_results, search_mode='hybrid'):
+        posts = []
+        for subreddit_name in targets:
+            subreddit = self.reddit.subreddit(subreddit_name)
+            # Search logic...
+            for submission in subreddit.search(...):
+                posts.append(SourcePost(
+                    source='reddit',
+                    source_id=submission.id,
+                    title=submission.title,
+                    body=submission.selftext,
+                    author=submission.author.name,
+                    source_location=f'r/{subreddit_name}',
+                    url=submission.url,
+                    score=submission.score,
+                    reply_count=submission.num_comments,
+                    created_utc=datetime.fromtimestamp(submission.created_utc),
+                    raw_data={'submission': submission}
+                ))
+        return posts
+
+    def get_replies(self, post, max_depth=10):
+        # Traverse comment tree...
+        pass
+```
+
+**Multi-Source Search Engine** (`src/core/search_engine.py`):
+```python
+from src.sources.base import DataSourcePlugin
+from typing import List, Dict
+
+class MultiSourceSearchEngine:
+    """Orchestrate searches across multiple data sources"""
+
+    def __init__(self):
+        self.plugins: Dict[str, DataSourcePlugin] = {}
+
+    def register_plugin(self, plugin: DataSourcePlugin):
+        """Register a data source plugin"""
+        self.plugins[plugin.source_name] = plugin
+
+    def search(
+        self,
+        keywords: List[str],
+        sources: Dict[str, List[str]],  # {'reddit': ['SaaS'], 'twitter': ['#startups']}
+        **kwargs
+    ):
+        """Search across multiple sources in parallel"""
+        all_posts = []
+
+        for source_name, targets in sources.items():
+            if source_name not in self.plugins:
+                logger.warning(f"Source '{source_name}' not available")
+                continue
+
+            plugin = self.plugins[source_name]
+            posts = plugin.search(keywords, targets, **kwargs)
+            all_posts.extend(posts)
+
+        return all_posts
+```
+
+**CLI Multi-Source Usage**:
+```bash
+# Search only Reddit (current behavior)
+redditsearch search --keywords "pay for" --source reddit --targets "SaaS,Entrepreneur"
+
+# Search only Twitter (future)
+redditsearch search --keywords "pay for" --source twitter --targets "#startups,#SaaS"
+
+# Search multiple sources simultaneously (future)
+redditsearch search --keywords "pay for" \
+  --source reddit --targets "SaaS,Entrepreneur" \
+  --source twitter --targets "#startups" \
+  --source hackernews --targets "Show HN"
+
+# Combined visualization across all sources
+redditsearch report <search_id>  # Shows Reddit + Twitter + HN data together
+```
+
+**Benefits**:
+1. **Add new sources easily**: Implement `DataSourcePlugin` interface
+2. **Source-agnostic analysis**: All analysis/visualization works with any source
+3. **Unified storage**: Single database schema for all sources
+4. **Combined insights**: Compare pain points across Reddit vs Twitter vs Discord
+5. **Future-proof**: Support for future platforms without refactoring core
+
+**Future Sources**:
+- **Twitter/X**: Search tweets and replies (using Twitter API v2)
+- **HackerNews**: Search via Algolia HN API
+- **Discord**: Search public servers (with permissions)
+- **Indie Hackers**: Forum discussions
+- **Product Hunt**: Product comments
+- **Stack Overflow**: Questions/answers in specific tags
+
+**Implementation Priority**:
+- Phase 3: Implement Reddit plugin (current focus)
+- Future: Add plugin architecture with Reddit as first implementation
+- Future: Add Twitter, HackerNews plugins as needed
+
+### 3. Reddit API Setup
 **User must obtain** (from https://www.reddit.com/prefs/apps):
 - Application name
 - Client ID
